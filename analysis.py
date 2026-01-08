@@ -245,7 +245,7 @@ with tabs[0]:
         else:
             st.warning("⚠️ Selecciona al menos una dimensión de color para generar el Heatmap")
 
-        st.plotly_chart(fig, use_container_width=True) if color_dim or chart_type != "Heatmap (Comparativa)" else None
+        # st.plotly_chart(fig, use_container_width=True) if color_dim or chart_type != "Heatmap (Comparativa)" else None
 
 # === TAB 2: ESTADÍSTICA ===
 with tabs[1]:
