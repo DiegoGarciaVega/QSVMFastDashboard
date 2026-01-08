@@ -227,7 +227,7 @@ with tabs[0]:
                       title=f"Tendencia de {y_axis} al aumentar {x_axis}")
                       
     elif chart_type == "Heatmap (Comparativa)":
-        # Pivot table para heatmap
+
         if color_dim:
             pivot_data = df_filtered.pivot_table(
                 values=y_axis,
@@ -235,6 +235,7 @@ with tabs[0]:
                 columns=color_dim,
                 aggfunc='mean'
             )
+
             fig = px.imshow(
                 pivot_data,
                 text_auto=".2f",
@@ -244,8 +245,6 @@ with tabs[0]:
             )
         else:
             st.warning("⚠️ Selecciona al menos una dimensión de color para generar el Heatmap")
-
-        st.plotly_chart(fig, use_container_width=True) if color_dim or chart_type != "Heatmap (Comparativa)" else None
 
 # === TAB 2: ESTADÍSTICA ===
 with tabs[1]:
