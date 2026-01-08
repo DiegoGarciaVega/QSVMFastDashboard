@@ -61,12 +61,18 @@ def load_data(uploaded_files):
             
     return final_dfs
 
-def get_time_columns(phase):
-    """Devuelve las columnas de tiempo relevantes según la fase."""
+def get_time_columns(phase, df):
+    """Devuelve las columnas de tiempo relevantes según la fase, incluyendo Affinity si existe."""
     if phase == "total":
-        return ['Total Time', 'Penny Time Total', 'Resto Time Total', 'SVM iteraciones']
+        base_cols = ['Total Time', 'Penny Time Total', 'Resto Time Total', 'SVM iteraciones']
     else:
-        return ['Penny Time', 'Resto Time']
+        base_cols = ['Penny Time', 'Resto Time']
+    
+    # Agregar Affinity si existe en el DataFrame
+    if 'Affinity' in df.columns:
+        base_cols.append('Affinity')
+    
+    return base_cols
 
 # --- 2. INTERFAZ: BARRA LATERAL ---
 
@@ -113,12 +119,27 @@ sel_machines = st.sidebar.multiselect("Máquinas", all_machines, default=all_mac
 sel_backends = st.sidebar.multiselect("Backend", all_backends, default=all_backends)
 sel_qubits = st.sidebar.multiselect("Qubits", all_qubits, default=all_qubits)
 
+# Filtro de Affinity (si existe)
+if 'Affinity' in df_main.columns:
+    all_affinities = sorted(df_main['Affinity'].unique())
+    sel_affinities = st.sidebar.multiselect("Affinity", all_affinities, default=all_affinities)
+else:
+    sel_affinities = None
+
 # Aplicar filtros
-df_filtered = df_main[
-    (df_main['Machine'].isin(sel_machines)) &
-    (df_main['Backend'].isin(sel_backends)) &
-    (df_main['Qubits'].isin(sel_qubits))
-]
+if sel_affinities is not None:
+    df_filtered = df_main[
+        (df_main['Machine'].isin(sel_machines)) &
+        (df_main['Backend'].isin(sel_backends)) &
+        (df_main['Qubits'].isin(sel_qubits)) &
+        (df_main['Affinity'].isin(sel_affinities))
+    ]
+else:
+    df_filtered = df_main[
+        (df_main['Machine'].isin(sel_machines)) &
+        (df_main['Backend'].isin(sel_backends)) &
+        (df_main['Qubits'].isin(sel_qubits))
+    ]
 
 # --- 3. DASHBOARD PRINCIPAL ---
 
@@ -126,7 +147,7 @@ st.title(f"Dashboard de Rendimiento: Fase {phase_input}")
 
 # Métricas Generales (Top Row)
 col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-time_cols = get_time_columns(phase_key)
+time_cols = get_time_columns(phase_key, df_filtered)
 main_metric = time_cols[0] # Por defecto el primer tiempo (Total o Penny)
 
 with col_m1:
@@ -148,13 +169,30 @@ tabs = st.tabs(["📊 Exploración Visual", "🧮 Análisis Estadístico Profund
 with tabs[0]:
     st.subheader("Comparativa Visual Dinámica")
     
+    # Opciones de agrupación y color (añadir Affinity si existe)
+    grouping_options = ['Qubits', 'Backend', 'Machine', 'Mode', 'Block Type']
+    color_options = ['Machine', 'Backend', 'Mode', 'Block Type']
+    
+    if 'Affinity' in df_filtered.columns:
+        grouping_options.append('Affinity')
+        color_options.append('Affinity')
+    
     c1, c2, c3 = st.columns(3)
     with c1:
         y_axis = st.selectbox("Métrica (Eje Y)", time_cols, index=0)
     with c2:
-        x_axis = st.selectbox("Agrupación (Eje X)", ['Qubits', 'Backend', 'Machine', 'Mode', 'Block Type'])
+        x_axis = st.selectbox("Agrupación (Eje X)", grouping_options)
     with c3:
-        color_dim = st.selectbox("Color / Leyenda", ['Machine', 'Backend', 'Mode', 'Block Type'], index=0)
+        color_dims = st.multiselect("Color / Leyenda (una o más)", color_options, default=[color_options[0]])
+    
+    # Crear columna combinada si se seleccionan múltiples dimensiones
+    if len(color_dims) > 1:
+        df_filtered['_combined_color'] = df_filtered[color_dims].astype(str).agg(' | '.join, axis=1)
+        color_dim = '_combined_color'
+    elif len(color_dims) == 1:
+        color_dim = color_dims[0]
+    else:
+        color_dim = None
 
     # Contenedor de gráficos
     chart_type = st.radio("Tipo de Gráfico", ["Boxplot (Distribución)", "Violin (Densidad)", "Barras (Promedio + Error)", "Líneas (Escalabilidad)", "Heatmap (Comparativa)"], horizontal=True)
@@ -169,10 +207,11 @@ with tabs[0]:
         
     elif chart_type == "Barras (Promedio + Error)":
         # Agrupar para calcular media y desviación
-        if color_dim != x_axis:
+        if color_dim and color_dim != x_axis:
             grp = [x_axis, color_dim]
         else:
             grp = [x_axis]
+            color_dim = None
             
         df_stats = df_filtered.groupby(grp)[y_axis].agg(['mean', 'std']).reset_index()
         fig = px.bar(df_stats, x=x_axis, y='mean', error_y='std', color=color_dim, barmode='group',
@@ -180,28 +219,39 @@ with tabs[0]:
         
     elif chart_type == "Líneas (Escalabilidad)":
         # Ideal para Qubits en el eje X
-        df_stats = df_filtered.groupby([x_axis, color_dim])[y_axis].mean().reset_index()
+        if color_dim:
+            df_stats = df_filtered.groupby([x_axis, color_dim])[y_axis].mean().reset_index()
+        else:
+            df_stats = df_filtered.groupby([x_axis])[y_axis].mean().reset_index()
         fig = px.line(df_stats, x=x_axis, y=y_axis, color=color_dim, markers=True,
                       title=f"Tendencia de {y_axis} al aumentar {x_axis}")
                       
     elif chart_type == "Heatmap (Comparativa)":
         # Pivot table para heatmap
-        pivot_data = df_filtered.pivot_table(values=y_axis, index=x_axis, columns=color_dim, aggfunc='mean')
-        fig = px.imshow(pivot_data, text_auto=".2f", aspect="auto", color_continuous_scale="Viridis",
-                        title=f"Mapa de Calor: Promedio de {y_axis}")
+        if color_dim:
+            pivot_data = df_filtered.pivot_table(values=y_axis, index=x_axis, columns=color_dim, aggfunc='mean')
+            fig = px.imshow(pivot_data, text_auto=".2f", aspect="auto", color_continuous_scale="Viridis",
+                            title=f"Mapa de Calor: Promedio de {y_axis}")
+        else:
+            st.warning("⚠️ Selecciona al menos una dimensión de color para generar el Heatmap")
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True) if color_dim or chart_type != "Heatmap (Comparativa)" else None
 
 # === TAB 2: ESTADÍSTICA ===
 with tabs[1]:
     st.subheader("Motor de Análisis Estadístico")
     st.markdown("Este módulo verifica premisas y selecciona automáticamente entre pruebas paramétricas y no paramétricas, ejecutando pruebas Post-Hoc si es necesario.")
 
+    # Opciones de factor (añadir Affinity si existe)
+    factor_options = ['Machine', 'Backend', 'Mode', 'Block Type', 'Qubits']
+    if 'Affinity' in df_filtered.columns:
+        factor_options.append('Affinity')
+
     c_stat1, c_stat2 = st.columns(2)
     with c_stat1:
         stat_target = st.selectbox("Variable Dependiente (Numérica)", time_cols, key="st_tgt")
     with c_stat2:
-        stat_factor = st.selectbox("Factor de Grupo (Categórica)", ['Machine', 'Backend', 'Mode', 'Block Type', 'Qubits'], key="st_fct")
+        stat_factor = st.selectbox("Factor de Grupo (Categórica)", factor_options, key="st_fct")
 
     if st.button("🚀 Ejecutar Análisis Estadístico Completo"):
         st.divider()
@@ -339,8 +389,13 @@ with tabs[2]:
         stack_cols = ['Penny Time Total', 'Resto Time Total']
     else:
         stack_cols = ['Penny Time', 'Resto Time']
+    
+    # Opciones de agrupación (añadir Affinity si existe)
+    stack_group_options = ['Backend', 'Machine', 'Qubits', 'Mode', 'Block Type']
+    if 'Affinity' in df_filtered.columns:
+        stack_group_options.append('Affinity')
         
-    stack_group = st.selectbox("Agrupar Tiempos por:", ['Backend', 'Machine', 'Qubits', 'Mode', 'Block Type'], key="stack_k")
+    stack_group = st.selectbox("Agrupar Tiempos por:", stack_group_options, key="stack_k")
     
     # Preparar datos
     df_stack = df_filtered.groupby(stack_group)[stack_cols].mean().reset_index()
